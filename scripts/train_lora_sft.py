@@ -14,7 +14,7 @@ from shopping_grpo.training.sft.dataset import (
     select_training_examples,
 )
 
-DEFAULT_TARGET_MODULES = (
+DEFAULT_TARGET_MODULES = (   #这些线性层加入了Lora
     "q_proj",
     "k_proj",
     "v_proj",
@@ -30,7 +30,7 @@ DEFAULT_TARGET_MODULES = (
     "out_proj",
 )
 
-
+# 定义训练参数
 def parse_args():
     parser = argparse.ArgumentParser(description="使用 Transformers + PEFT 执行 Shopping LoRA SFT")
     parser.add_argument("--model", required=True, help="Hugging Face 模型名或本地模型目录")
@@ -105,7 +105,7 @@ def parse_args():
     )
     return parser.parse_args()
 
-
+#从课程学习（curriculum）的 manifest.json 中，取出指定阶段、指定数据划分对应的所有 task_id，并返回成一个集合。
 def _curriculum_task_ids(path, stage, split):
     manifest = json.loads(Path(path).read_text(encoding="utf-8"))
     try:
@@ -119,7 +119,7 @@ def _curriculum_task_ids(path, stage, split):
     except (KeyError, TypeError) as exc:
         raise SystemExit(f"课程清单缺少阶段 {stage!r} 的 {split} task IDs") from exc
 
-
+#检查 SFT 训练需要的 Python 库是否已经安装，并把后面训练要用的工具统一返回。
 def _training_dependencies():
     try:
         import torch
@@ -154,7 +154,7 @@ def _training_dependencies():
         TrainingArguments,
     )
 
-
+#根据你传入的训练参数，整理出“加载模型时需要用到的一组配置
 def _model_load_kwargs(args, dtype, bits_and_bytes_config):
     """构造可审计的模型加载参数；加速功能必须显式开启。"""
     kwargs = {"torch_dtype": dtype, "trust_remote_code": True}
@@ -176,10 +176,10 @@ def _prepare_model_for_training(model, args, prepare_model_for_kbit_training):
     """按 PEFT 推荐顺序准备量化模型与梯度检查点。"""
     if args.qlora:
         model = prepare_model_for_kbit_training(
-            model, use_gradient_checkpointing=args.gradient_checkpointing
+            model, use_gradient_checkpointing=args.gradient_checkpointing #开启梯度检查点
         )
     if args.gradient_checkpointing:
-        model.config.use_cache = False
+        model.config.use_cache = False  #不使用KVcache
         if not args.qlora and hasattr(model, "enable_input_require_grads"):
             model.enable_input_require_grads()
     return model
@@ -204,7 +204,7 @@ def _validate_optional_training_dependencies(args):
                 "uv sync --extra sft --extra sft-accelerated"
             ) from exc
 
-
+#决定模型训练时到底使用 BF16、FP16 还是 FP32，并把结果转换成 PyTorch 能识别的数据类型。
 def _resolve_dtype(args, torch):
     """Resolve one explicit dtype for model loading and TrainingArguments."""
 
@@ -267,7 +267,7 @@ def _loss_only_eval_trainer_class(trainer_base, enable_skip_logits):
             prediction_loss_only,
             ignore_keys=None,
         ):
-            if enable_skip_logits and prediction_loss_only and inputs.get("labels") is not None:
+            if enable_skip_logits and prediction_loss_only and inputs.get("labels") is not None:  #开启了skip logits功能，当前只计算loss，当前数据里面有labels
                 inputs = dict(inputs)
                 inputs["skip_logits"] = True
             return super().prediction_step(
@@ -279,7 +279,7 @@ def _loss_only_eval_trainer_class(trainer_base, enable_skip_logits):
 
     return LossOnlyEvalTrainer
 
-
+#根据模型类型，决定后续预处理时应该用 Tokenizer（纯文本） 还是 Processor 来处理聊天模板（多模态）。
 def _load_preprocessing_components(
     model_name,
     auto_config,
@@ -299,12 +299,12 @@ def _load_preprocessing_components(
     config = auto_config.from_pretrained(model_name, **load_kwargs)
     is_multimodal = str(getattr(config, "model_type", "")).startswith("qwen3_5")
     if is_multimodal:
-        processor = auto_processor.from_pretrained(model_name, **load_kwargs)
+        processor = auto_processor.from_pretrained(model_name, **load_kwargs) #从 Qwen3.5 模型中加载它配套的 Processor
         return processor.tokenizer, processor, True
     tokenizer = auto_tokenizer.from_pretrained(model_name, **load_kwargs)
     return tokenizer, tokenizer, False
 
-
+#把前面已经处理好的训练样本 examples，包装成 PyTorch 能直接交给 Trainer 使用的数据集。
 def _torch_dataset(examples, torch):
     class TokenizedDataset(torch.utils.data.Dataset):
         def __len__(self):
@@ -320,7 +320,7 @@ def _torch_dataset(examples, torch):
 
     return TokenizedDataset()
 
-
+#把一个batch里长度不同的而多条训练样本，补齐成相同长度，方便一起送进模型训练。并且通过attention_mask，保证补出来的padding不参与训练
 def _collate(batch, pad_token_id, torch):
     """右侧 padding，labels 的 padding 永远不参与 loss。"""
     max_length = max(item["input_ids"].size(0) for item in batch)
@@ -337,7 +337,7 @@ def _collate(batch, pad_token_id, torch):
 
 def main():
     _start_time = _time.time()
-    args = parse_args()
+    args = parse_args()  #这段代码是在正式 SFT 训练前，把参数、课程阶段和数据安全性先检查清楚。
     if args.max_length < 1 or args.epochs <= 0:
         raise SystemExit("--max-length 与 --epochs 必须为正数")
     if bool(args.curriculum_manifest) != bool(args.curriculum_stage):
@@ -409,7 +409,7 @@ def main():
             epoch_time = _time.time() - self.epoch_start if self.epoch_start else 0
             print(f"  EPOCH {int(state.epoch)} 完成  耗时={epoch_time/60:.1f}min")
 
-    tokenizer, chat_template, is_multimodal = _load_preprocessing_components(
+    tokenizer, chat_template, is_multimodal = _load_preprocessing_components( #加载分词器，加载chat_templete
         args.model,
         auto_config=AutoConfig,
         auto_tokenizer=AutoTokenizer,
@@ -490,6 +490,7 @@ def main():
         args,
         prepare_model_for_kbit_training=prepare_model_for_kbit_training,
     )
+    #把 LoRA 挂到原始模型上，并检查到底有多少参数会被训练
     model = get_peft_model(
         model,
         LoraConfig(
@@ -514,7 +515,7 @@ def main():
             logdir=str(args.output / "swanlab"),
         )
         print(f"[SwanLab] project={args.swanlab_project} run={run_name}")
-    training_args = TrainingArguments(
+    training_args = TrainingArguments(   #这一次的训练配置
         output_dir=str(args.output),
         num_train_epochs=args.epochs,
         per_device_train_batch_size=args.per_device_train_batch_size,
@@ -540,7 +541,7 @@ def main():
         Trainer,
         enable_skip_logits=args.liger_kernel and is_multimodal,
     )
-    trainer = trainer_class(
+    trainer = trainer_class(   
         model=model,
         args=training_args,
         train_dataset=_torch_dataset(train_examples, torch),
@@ -548,7 +549,7 @@ def main():
         data_collator=partial(_collate, pad_token_id=tokenizer.pad_token_id, torch=torch),
         callbacks=[ProgressCallback()],
     )
-    result = trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
+    result = trainer.train(resume_from_checkpoint=args.resume_from_checkpoint) #开始训练了
     trainer.save_model(str(args.output))
     chat_template.save_pretrained(str(args.output))
 
