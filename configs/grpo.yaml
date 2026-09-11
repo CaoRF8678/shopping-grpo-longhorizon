@@ -17,28 +17,28 @@ data:
   return_raw_chat: true
   filter_overlong_prompts: true
   truncation: error
-
+#actor 真正被训练的模型，rollout 负责生成购物轨迹的模型推理端 ref参考模型
 actor_rollout_ref:
   model:
     path: ${oc.env:GRPO_MODEL_PATH}
     trust_remote_code: true
     enable_gradient_checkpointing: true
     use_remove_padding: false
-    lora_rank: 16
+    lora_rank: 16   #GRPO仍然用LoRA
     lora_alpha: 32
-    target_modules: all-linear
+    target_modules: all-linear  #给所有的linear挂LoRA
     lora:
       merge: true
     override_config:
       attn_implementation: sdpa
-  actor:
+  actor:  #正在学习购物策略的Qwen
     ppo_mini_batch_size: 2
     ppo_micro_batch_size_per_gpu: 1
     ppo_max_token_len_per_gpu: 24576
     use_dynamic_bsz: false
     freeze_vision_tower: true
     loss_agg_mode: token-mean
-    clip_ratio_low: 0.20
+    clip_ratio_low: 0.20   #GRPO底层仍使用PPO-style clipped objective
     clip_ratio_high: 0.20
     entropy_coeff: 0.0
     calculate_entropy: true
@@ -53,7 +53,7 @@ actor_rollout_ref:
       param_offload: true
   rollout:
     name: vllm
-    mode: async
+    mode: async   #异步执行
     n: 4
     temperature: 0.7
     top_p: 0.9
@@ -86,7 +86,7 @@ actor_rollout_ref:
       temperature: 0.0
       top_p: 1.0
       do_sample: false
-  ref:
+  ref:  
     log_prob_micro_batch_size_per_gpu: 1
     log_prob_max_token_len_per_gpu: 24576
     log_prob_use_dynamic_bsz: false
@@ -98,7 +98,7 @@ algorithm:
   use_kl_in_reward: false
   norm_adv_by_std_in_grpo: false
   rollout_correction:
-    bypass_mode: true
+    bypass_mode: true  #这个实验把 veRL 的额外 rollout correction 机制绕过了。
     rollout_is: null
     rollout_rs: null
     loss_type: ppo_clip
